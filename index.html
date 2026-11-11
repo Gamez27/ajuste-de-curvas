@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Curvas de fallos de caché, explicadas contando líneas distintas</title>
+<style>
+:root{--bg:#f6f8fb;--fg:#17202e;--mu:#586174;--card:#fff;--ln:#d6dce6;--a:#2557d6;--b:#e0561a;--g:#1f8a4c;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f141c;--fg:#e7ebf3;--mu:#9aa5ba;--card:#171e29;--ln:#2d3748;--a:#7aa2ff;--b:#ff8a4d;--g:#5ccf8a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f141c;--fg:#e7ebf3;--mu:#9aa5ba;--card:#171e29;--ln:#2d3748;--a:#7aa2ff;--b:#ff8a4d;--g:#5ccf8a;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background-image:linear-gradient(var(--ln) 1px,transparent 1px),linear-gradient(90deg,var(--ln) 1px,transparent 1px);background-size:32px 32px;background-position:-1px -1px}
+body::before{content:"";position:fixed;inset:0;background:var(--bg);opacity:.93;z-index:-1}
+main{max-width:800px;margin:0 auto;padding:28px 18px 60px}
+h1,h2{font-family:"Iowan Old Style",Georgia,"Times New Roman",serif;line-height:1.15;margin:0 0 .5em}
+h1{font-size:clamp(2rem,6vw,3.1rem);letter-spacing:-.02em}
+h2{font-size:1.6rem;margin-top:2.6em}
+h3{font-size:1.05rem;margin:0 0 .3em}
+p{margin:.6em 0}.lead{font-size:1.15rem;color:var(--mu);max-width:60ch}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:16px;margin:1.1em 0}
+.k{border-left:4px solid var(--a);padding:2px 14px;margin:1.2em 0;background:var(--card);border-radius:0 8px 8px 0}
+.k.o{border-color:var(--b)}
+code,.f{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em}
+.f{display:block;text-align:center;font-size:1.15rem;padding:10px;margin:.8em 0;background:var(--bg);border:1px dashed var(--ln);border-radius:8px;overflow-x:auto}
+svg{width:100%;height:auto;display:block}
+.g{stroke:var(--ln);stroke-width:1}.t{fill:var(--mu);font-size:11px}
+label{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:.95rem;margin:.4em 0}
+input[type=range]{flex:1;min-width:140px;accent-color:var(--a)}
+output,.v{font-weight:700;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:.6em 0}
+.chip{width:38px;height:38px;display:grid;place-items:center;border-radius:8px;font-weight:700;border:2px solid var(--ln);color:var(--mu)}
+.chip.n{background:var(--a);border-color:var(--a);color:#fff}.chip.e{opacity:.35;border-style:dashed}
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.flow div{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:12px;font-size:.93rem}
+.flow b{display:block;color:var(--a);margin-bottom:3px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.stats div{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:12px}
+.stats strong{display:block;font:700 1.7rem Georgia,serif;color:var(--a)}
+.stats span{font-size:.9rem;color:var(--mu)}
+table{width:100%;border-collapse:collapse;font-size:.93rem;display:block;overflow-x:auto}
+td,th{padding:8px 10px;border-bottom:1px solid var(--ln);text-align:left;white-space:nowrap}
+tr.me td{font-weight:700;color:var(--g)}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:4px}
+small{color:var(--mu)}
+</style></head><body><main>
+
+<h1>¿Cuánta caché necesita un programa? Se puede saber sin vigilar cada acceso</h1>
+<p class="lead">Un resumen visual del artículo <i>Cache Miss Curve Analysis via Cardinality Domain</i> (Arima y Schulz, TU Múnich, PACT 2025). Empieza moviendo el control de abajo.</p>
+
+<div class="card">
+<h3>La caché como una mesa de trabajo</h3>
+<p>Cada barra indica con qué frecuencia un dato reutilizado estaba a esa “profundidad” de la pila (más a la izquierda = usado hace muy poco). Una caché con capacidad <b>c</b> guarda los c datos más recientes: lo que cae a la derecha es un <b style="color:var(--b)">fallo</b>.</p>
+<div id="h1"></div>
+<label>Capacidad c <input id="c1" type="range" min="1" max="32" value="6"> <output id="o1"></output></label>
+<p>Tasa de fallos M(c) = <span class="v" id="m1" style="color:var(--b)"></span> &nbsp;<small>(suma de las barras naranjas)</small></p>
+</div>
+
+<h2>1. ¿Qué es una curva de fallos?</h2>
+<p>Si repites el experimento anterior con todas las capacidades posibles y apuntas la tasa de fallos de cada una, obtienes la <b>curva de fallos</b>: cuántos fallos tendrás según el tamaño de caché. Sirve para decidir cuánta caché asignar a cada programa, diseñar memorias, afinar código o repartir recursos entre procesos.</p>
+<div class="card"><div id="h1b"></div><small>La misma información, vista como curva: al crecer la capacidad, los fallos bajan.</small></div>
+
+<h2>2. El problema: medirla es caro</h2>
+<p>El método clásico (Mattson, 1970) mantiene una pila LRU y anota la profundidad de cada reutilización, la <i>distancia de pila</i>. Es exacto pero lento: costó décadas de trabajo crear aproximaciones (distancia de reuso, árboles, hashing, aprendizaje automático). Casi todas siguen necesitando recordar cada línea única que el programa ha tocado, es decir, memoria proporcional al tamaño de sus datos.</p>
+
+<h2>3. La idea: no rastrear distancias, contar líneas distintas</h2>
+<p>Los autores proponen mirar otra cosa: <b>cuántos accesos hacen falta para ver u líneas de caché distintas</b>. A esa función la llaman cardinalidad, N(u). Recorre la secuencia y fíjate en cuándo aparece una línea nueva:</p>
+<div class="card">
+<div class="chips" id="chips"></div>
+<label>Accesos observados <input id="sq" type="range" min="0" max="8" value="8"> <output id="o2"></output></label>
+<p id="t2"></p>
+</div>
+<div class="k"><b>¿Por qué sirve?</b> Con u líneas ya vistas, ver una <i>nueva</i> equivale a un fallo en una caché de u entradas. Cada acceso es como lanzar una moneda: con probabilidad M(u) es una línea nueva. Cuántos intentos esperas hasta el primer éxito lo da la distribución geométrica:
+<span class="f">E<sub>u</sub> = 1 / M(u)</span>
+Es decir, los accesos extra para descubrir la línea u+1 son 1/M(u). Por tanto N(u+1) − N(u) ≈ 1/M(u).</div>
+<div class="k o"><b>La fórmula clave.</b> En versión continua, la curva de fallos es el inverso de la pendiente de la curva de cardinalidad:
+<span class="f">M(c) = 1 / N′(c)</span>
+Curva de cardinalidad empinada ⇒ pocos fallos. Casi plana ⇒ muchos fallos.</div>
+
+<h2>4. De una curva a la otra</h2>
+<p>Muchas cargas reales siguen aproximadamente una ley de potencias: <code>N(u) = u<sup>α</sup></code>. Entonces <code>M(c) = c<sup>1−α</sup> / α</code>. Cambia α y mira cómo la pendiente de la izquierda (en escala log-log) fija la de la derecha. Los puntos simulan medidas ruidosas de un contador; la curva ajustada las suaviza.</p>
+<div class="card">
+<label>Localidad α <input id="al" type="range" min="1.05" max="3" step=".05" value="1.6"> <output id="o3"></output></label>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px"><div id="pN"></div><div id="pM"></div></div>
+<p id="t3"></p>
+</div>
+<p><small>α cercano a 1 = casi sin reutilización (accesos en “stride”, casi todo falla). α grande = mucha reutilización. El artículo también ajusta curvas exponenciales, lineales y <i>splines</i> para casos irregulares.</small></p>
+
+<h2>5. Cómo se mide sin gastar memoria</h2>
+<div class="flow">
+<div><b>1. Secuencia</b>Direcciones de memoria de un programa (p. ej. con Pin).</div>
+<div><b>2. Contador de únicos</b>HyperLogLog o filtro de Bloom estiman cuántas líneas distintas van.</div>
+<div><b>3. Ajuste</b>Se ajusta una curva a los puntos (u, N).</div>
+<div><b>4. Derivada</b>M(c) = 1/N′(c): la curva de fallos sale gratis.</div>
+</div>
+<div class="k"><b>El truco de HyperLogLog</b> funciona como las monedas: si en alguna tanda lograste 10 caras seguidas, probablemente lanzaste unas 2<sup>10</sup> veces. Se hashea cada dirección y se guarda solo la mayor racha de ceros iniciales R; la cantidad de elementos distintos ≈ 2<sup>R</sup>. Con 64 contadores bastan unos 48 bytes.</div>
+<div class="card"><h3>Memoria usada al crecer la traza (esquema ilustrativo)</h3><div id="pMem"></div>
+<small>Los métodos clásicos crecen con los datos únicos; el contador de cardinalidad se queda constante (Fig. 16 del artículo).</small></div>
+
+<h2>6. Dos extras gracias a la cardinalidad</h2>
+<h3>Trazas muestreadas</h3>
+<p>Si solo se registra 1 de cada R accesos, parece que hay menos reutilización. Los autores corrigen N y u asumiendo la ley de potencias: <code>N = R·N<sub>s</sub></code>, con un parámetro β que hay que afinar por programa.</p>
+<h3>Mezclar programas que comparten caché</h3>
+<p>Las cardinalidades se suman: N<sub>mix</sub> = N₁ + N₂ y u<sub>mix</sub> = u₁ + u₂ (si no comparten datos). De ahí sale que la tasa de fallos conjunta es el promedio de las de cada programa, ponderado por su frecuencia de acceso ω<sub>i</sub>, y que cada uno ocupa una “capacidad aparente” c<sub>i</sub>. Pruébalo con dos programas de ley de potencias:</p>
+<div class="card">
+<label>Programa 1: α₁ <input id="a1" type="range" min="1.1" max="3" step=".1" value="1.4"> <output id="oa1"></output></label>
+<label>Programa 2: α₂ <input id="a2" type="range" min="1.1" max="3" step=".1" value="2.2"> <output id="oa2"></output></label>
+<label>Accesos del programa 1 (del total) <input id="w" type="range" min="5" max="95" step="5" value="50"> <output id="ow"></output></label>
+<label>Capacidad c <input id="cm" type="range" min="16" max="4096" step="16" value="512"> <output id="ocm"></output></label>
+<div id="pX"></div>
+<p id="t4"></p>
+<small><span class="sw" style="background:var(--a)"></span>programa 1 &nbsp;<span class="sw" style="background:var(--g)"></span>programa 2 &nbsp;<span class="sw" style="background:var(--b)"></span>mezcla</small>
+</div>
+<p>El algoritmo del artículo hace una búsqueda binaria sobre N para que c₁ + c₂ = c, y evita simular la pila de cada combinación de programas.</p>
+
+<h2>7. Resultados (SPEC CPU 2017)</h2>
+<div class="stats">
+<div><strong>O(N)</strong><span>tiempo lineal, igual que el mejor método existente (distancia de reuso)</span></div>
+<div><strong>O(1)</strong><span>memoria constante con HyperLogLog (≈48 B para 64 contadores)</span></div>
+<div><strong>×371</strong><span>más rápido que reuso al sintetizar la curva de una mezcla (1 capacidad)</span></div>
+<div><strong>≈2%</strong><span>error de capacidad para un objetivo de 10% de fallos (|ΔM|≈0,001)</span></div>
+</div>
+<div class="card"><table>
+<tr><th>Método</th><th>Tiempo</th><th>Memoria</th></tr>
+<tr><td>Pila LRU (Mattson)</td><td>O(N·L)</td><td>O(u)</td></tr>
+<tr><td>Árbol (Bennett)</td><td>O(N log L)</td><td>O(u)</td></tr>
+<tr><td>Distancia de reuso</td><td>O(N)</td><td>O(u)</td></tr>
+<tr class="me"><td>Cardinalidad (este trabajo)</td><td>O(N)</td><td>O(1)</td></tr>
+</table></div>
+<p>Además, de la curva solo se guardan unos pocos coeficientes, así que el almacenamiento también es casi constante: útil para perfilar programas fase por fase.</p>
+
+<h2>Límites a tener presentes</h2>
+<p>La aproximación asume reemplazo LRU y funciona mejor con trazas largas. El muestreo exige afinar β para cada programa. Y la mezcla supone programas que no comparten datos. Los autores proponen integrar la técnica con rastreo por hardware (Intel PEBS) para decisiones en tiempo real, como la partición de caché.</p>
+<p><small>Fuente: E. Arima y M. Schulz, “Cache Miss Curve Analysis via Cardinality Domain”, PACT 2025. Los gráficos de esta página son ilustraciones propias con modelos simplificados, no los datos medidos del artículo.</small></p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function plot(o){const W=520,H=270,L=48,R=14,T=12,B=40,fx=o.lx?Math.log10:v=>v,fy=o.ly?Math.log10:v=>v,
+[x0,x1]=o.x.map(fx),[y0,y1]=o.y.map(fy),X=v=>L+(fx(v)-x0)/(x1-x0)*(W-L-R),Y=v=>H-B-(fy(Math.max(v,o.y[0]))-y0)/(y1-y0)*(H-T-B),
+tk=(a,b,g)=>{const r=[];if(g)for(let e=Math.ceil(a);e<=b;e++)r.push(10**e);else for(let i=0;i<=4;i++)r.push(a+(b-a)*i/4);return r},
+f=v=>v>=1e4||(v<.01&&v>0)?v.toExponential(0).replace("e+","e"):+v.toPrecision(2);
+let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.t}">`;
+tk(x0,x1,o.lx).forEach(v=>s+=`<line class="g" x1="${X(v)}" x2="${X(v)}" y1="${T}" y2="${H-B}"/><text class="t" x="${X(v)}" y="${H-B+15}" text-anchor="middle">${f(v)}</text>`);
+tk(y0,y1,o.ly).forEach(v=>s+=`<line class="g" x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="t" x="${L-5}" y="${Y(v)+4}" text-anchor="end">${f(v)}</text>`);
+if(o.v)s+=`<line x1="${X(o.v)}" x2="${X(o.v)}" y1="${T}" y2="${H-B}" style="stroke:var(--mu);stroke-dasharray:4 4"/>`;
+(o.s||[]).forEach((q,i)=>{s+=`<path fill="none" stroke-width="2.6" style="stroke:${q.c}" d="${q.d.map((p,j)=>(j?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join("")}"/>`;
+if(q.n)s+=`<text x="${L+8}" y="${T+16+15*i}" font-size="12" style="fill:${q.c}">${q.n}</text>`});
+(o.p||[]).forEach(p=>s+=`<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="3" style="fill:var(--b);opacity:.7"/>`);
+s+=`<text class="t" x="${(L+W-R)/2}" y="${H-3}" text-anchor="middle">${o.xl}</text><text class="t" transform="translate(11 ${(T+H-B)/2}) rotate(-90)" text-anchor="middle">${o.yl}</text></svg>`;return s}
+const lg=(a,b,n)=>Array.from({length:n},(_,i)=>a*Math.pow(b/a,i/(n-1)));
+const pct=v=>(v*100).toFixed(1).replace(".",",")+"%";
+/* 1. histograma de distancias de pila */
+const fl=Array.from({length:64},(_,l)=>Math.pow(l+1,-1.4)),Z=fl.reduce((a,b)=>a+b,0),pf=fl.map(v=>v/Z);
+const Mc=c=>1-pf.slice(0,c).reduce((a,b)=>a+b,0);
+function r1(){const c=+$("c1").value,W=520,H=230,L=40,bw=(W-L-10)/32;let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Distribución de distancias de pila con la capacidad marcada">`;
+for(let l=0;l<32;l++){const h=pf[l]/pf[0]*170,x=L+l*bw;s+=`<rect x="${x+1}" y="${190-h}" width="${bw-2}" height="${h}" rx="2" style="fill:${l<c?"var(--a)":"var(--b)"}"/>`;if(l%4==0)s+=`<text class="t" x="${x+bw/2}" y="205" text-anchor="middle">${l}</text>`}
+s+=`<line x1="${L+c*bw}" x2="${L+c*bw}" y1="8" y2="190" style="stroke:var(--fg);stroke-width:2;stroke-dasharray:5 4"/><text x="${Math.min(L+c*bw+6,W-150)}" y="20" font-size="12" style="fill:var(--fg)">capacidad c = ${c}</text>
+<text class="t" x="${(L+W)/2}" y="224" text-anchor="middle">distancia de pila l (0 = el más reciente)</text><text class="t" transform="translate(12 100) rotate(-90)" text-anchor="middle">probabilidad f(l)</text>
+<text x="${W-12}" y="60" text-anchor="end" font-size="12" style="fill:var(--a)">■ acierto</text><text x="${W-12}" y="76" text-anchor="end" font-size="12" style="fill:var(--b)">■ fallo (incl. cola &gt;31)</text></svg>`;
+$("h1").innerHTML=s;$("o1").textContent=c;$("m1").textContent=pct(Mc(c))}
+$("c1").oninput=r1;r1();
+$("h1b").innerHTML=plot({t:"Curva de fallos",x:[1,32],y:[0,1],xl:"capacidad c",yl:"tasa de fallos M(c)",s:[{c:"var(--b)",d:Array.from({length:32},(_,i)=>[i+1,Mc(i+1)])}]});
+/* 3. secuencia */
+const sq=["A","B","A","C","C","A","B","D"];
+function r2(){const n=+$("sq").value,seen=new Set();let h="";sq.forEach((x,i)=>{if(i<n){const nw=!seen.has(x);seen.add(x);h+=`<div class="chip ${nw?"n":""}">${x}</div>`}else h+=`<div class="chip e">${x}</div>`});
+$("chips").innerHTML=h;$("o2").textContent="N = "+n;
+$("t2").innerHTML=`<b>${seen.size}</b> líneas distintas tras <b>${n}</b> accesos. Azul = primera vez (aporta a u); gris = reutilización (ya estaba).`}
+$("sq").oninput=r2;r2();
+/* 4. alfa */
+function r3(){const a=+$("al").value,us=lg(1,1e3,40),ns=lg(1,1e3,18);
+$("pN").innerHTML=plot({t:"Cardinalidad N(u)",lx:1,ly:1,x:[1,1e3],y:[1,1e9],xl:"líneas distintas u",yl:"accesos N(u)",s:[{c:"var(--a)",d:us.map(u=>[u,u**a])}],p:ns.map((u,i)=>[u,u**a*(1+.3*((Math.sin(i*78.233)*43758.5453)%1))])});
+$("pM").innerHTML=plot({t:"Curva de fallos M(c)",lx:1,ly:1,x:[1,1e3],y:[1e-6,1],xl:"capacidad c",yl:"tasa de fallos M(c)",s:[{c:"var(--b)",d:us.map(c=>[c,Math.min(1,c**(1-a)/a)])}]});
+$("o3").textContent=a.toFixed(2).replace(".",",");
+$("t3").innerHTML=`Pendiente de N(u) = <b>${a.toFixed(2).replace(".",",")}</b> ⇒ pendiente de M(c) = 1 − α = <b>${(1-a).toFixed(2).replace(".",",")}</b>. Con c = 100 líneas, M ≈ <b>${pct(Math.min(1,100**(1-a)/a))}</b>.`}
+$("al").oninput=r3;r3();
+/* memoria */
+$("pMem").innerHTML=plot({t:"Memoria frente al tamaño de la traza",lx:1,ly:1,x:[1e4,1e7],y:[10,1e8],xl:"accesos N",yl:"memoria (bytes)",s:[{c:"var(--b)",n:"Pila / reuso: crece con u",d:lg(1e4,1e7,20).map(n=>[n,80*n**(2/3)])},{c:"var(--a)",n:"HyperLogLog: constante",d:[[1e4,48],[1e7,48]]}]});
+/* mezcla */
+const Mi=(a,c)=>Math.min(1,c**(1-a)/a);
+function mix(a1,a2,w1,c){let lo=0,hi=1e14;const ci=(a,w,N)=>(w*N)**(1/a);for(let k=0;k<200;k++){const N=(lo+hi)/2;ci(a1,w1,N)+ci(a2,1-w1,N)>c?hi=N:lo=N}
+const N=(lo+hi)/2,c1=ci(a1,w1,N),c2=ci(a2,1-w1,N);return{c1,c2,m1:Mi(a1,c1),m2:Mi(a2,c2),m:w1*Mi(a1,c1)+(1-w1)*Mi(a2,c2)}}
+function r4(){const a1=+$("a1").value,a2=+$("a2").value,w=+$("w").value/100,c=+$("cm").value,r=mix(a1,a2,w,c),cs=lg(16,4096,30);
+$("oa1").textContent=a1.toFixed(1).replace(".",",");$("oa2").textContent=a2.toFixed(1).replace(".",",");$("ow").textContent=Math.round(w*100)+"%";$("ocm").textContent=c;
+$("pX").innerHTML=plot({t:"Curvas de fallos de dos programas y de su mezcla",lx:1,ly:1,x:[16,4096],y:[1e-4,1],v:c,xl:"capacidad c (la línea vertical es la elegida)",yl:"tasa de fallos",s:[{c:"var(--a)",d:cs.map(x=>[x,Mi(a1,x)])},{c:"var(--g)",d:cs.map(x=>[x,Mi(a2,x)])},{c:"var(--b)",d:cs.map(x=>[x,mix(a1,a2,w,x).m])}]});
+$("t4").innerHTML=`Capacidad aparente: programa 1 ocupa <b>${r.c1.toFixed(0)}</b> líneas y programa 2 <b>${r.c2.toFixed(0)}</b> (suman ${c}). Fallos: programa 1 <b>${pct(r.m1)}</b>, programa 2 <b>${pct(r.m2)}</b>, mezcla <b>${pct(r.m)}</b>.`}
+["a1","a2","w","cm"].forEach(i=>$(i).oninput=r4);r4();
+</script></body></html>
